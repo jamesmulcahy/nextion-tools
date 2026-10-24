@@ -21,4 +21,16 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e ".[${{ matrix.extras }}]"
+      # The tests that read files the Editor made use NSPanel Manager's US project and its TFT,
+      # at a fixed commit.
+      - name: Fetch real Editor files
+        env:
+          REF: 38f74e2bbc5ef7d1431e6618f8a96fd8fe42df16
+        run: |
+          base="https://raw.githubusercontent.com/NSPManager/NSPanelManager/$REF/docker/HMI_files"
+          mkdir -p fixtures
+          curl -sSfL -o fixtures/gui.HMI "$base/tft_automation/us/gui.HMI"
+          curl -sSfL -o fixtures/gui.tft "$base/gui_us.tft"
+          echo "NEXTION_TOOLS_HMI=$PWD/fixtures/gui.HMI" >> "$GITHUB_ENV"
+          echo "NEXTION_TOOLS_TFT=$PWD/fixtures/gui.tft" >> "$GITHUB_ENV"
       - run: python -m pytest -v
