@@ -159,3 +159,7 @@ Editor made, and are skipped unless given them:
 ```
 NEXTION_TOOLS_HMI=path/to/gui.HMI NEXTION_TOOLS_TFT=path/to/gui.tft python -m pytest
 ```
+
+## License
+
+MIT; see [LICENSE](LICENSE).
