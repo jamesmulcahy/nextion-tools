@@ -6,7 +6,9 @@
 - `nextion_tools.images`: pictures as RGB arrays, RGB565 (numpy, Pillow)
 - `nextion_tools.tft`: a compiled .tft's picture table, checksums and orientation
 - `nextion_tools.crc`: the CRC behind TFT checksums and HMI stamps
-- `nextion_tools.emu`: an emulated display, driven by an HMI, for testing MCU firmware
+- `nextion_tools.render`: draw a page as the display shows it (numpy, Pillow)
+- `nextion_tools.emu`: an emulated display, driven by an HMI, for testing MCU firmware, with a
+  browser viewer (`nextion_tools.emu.viewer`)
 """
 
 __version__ = "0.1.0"
