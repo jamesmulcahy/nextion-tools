@@ -57,13 +57,13 @@ class Screen:
     @property
     def first_page(self) -> Optional[str]:
         """The page a display shows when it starts: page 0."""
-        page = self.hmi.page_by_id(0)
-        return page.name if page else None
+        return self.hmi.pages[0].name if self.hmi.pages else None
 
     def page(self, name_or_id: str) -> Optional[Page]:
         name_or_id = name_or_id.strip()
         if name_or_id.isdigit():
-            return self.hmi.page_by_id(int(name_or_id))
+            page_id = int(name_or_id)
+            return self.hmi.pages[page_id] if page_id < len(self.hmi.pages) else None
         return self.hmi.find_page(name_or_id)
 
     def resolve(self, key: str, current_page: Optional[str]) -> Optional[Target]:

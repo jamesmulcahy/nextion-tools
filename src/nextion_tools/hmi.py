@@ -304,8 +304,10 @@ class Project:
     def find_page(self, name: str) -> Optional[Page]:
         return self._by_name.get(name)
 
-    def page_by_id(self, page_id: int) -> Optional[Page]:
-        return self.pages[page_id] if 0 <= page_id < len(self.pages) else None
+    def page_by_id(self, page_id: int) -> Page:
+        if not 0 <= page_id < len(self.pages):
+            raise KeyError("no page with id %d" % page_id)
+        return self.pages[page_id]
 
     def resources(self) -> List[str]:
         """The block names main.HMI lists, in its order."""

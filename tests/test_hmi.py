@@ -28,7 +28,9 @@ def test_pages_in_main_hmi_order_whatever_their_block_names(project):
     assert [(p.id, p.name) for p in project.pages] == [(0, "page0"), (1, "home"), (2, "screensaver")]
     assert project.page("home").id == 1
     assert project.page_by_id(2).name == "screensaver"
-    assert project.find_page("nowhere") is None and project.page_by_id(9) is None
+    assert project.find_page("nowhere") is None
+    with pytest.raises(KeyError, match="no page with id 9"):
+        project.page_by_id(9)
     with pytest.raises(KeyError, match="no page nowhere"):
         project.page("nowhere")
 
