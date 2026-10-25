@@ -110,7 +110,7 @@ def test_rotation():
         assert render.rotated_size((3, 2), rotation) == turned.shape[1::-1]
     with pytest.raises(ValueError):
         render.rotate(fb, 45)
-    assert render.native_rotation(270) == 90 and render.native_rotation(0) == 0
+    assert render.native_rotation(90) == 90 and render.native_rotation(0) == 0
 
 
 def test_display_snapshot_follows_what_the_mcu_sends(project, tmp_path):

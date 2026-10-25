@@ -431,10 +431,11 @@ def unrotate_point(x: int, y: int, rotation: int, size: Tuple[int, int]) -> Tupl
 
 def native_rotation(tft_orientation: int) -> int:
     """The rotation that shows a page as the LCD's own frame holds it, from the orientation a TFT
-    records (nextion_tools.tft.orientation): the display turns its frame by that much to draw
-    the page upright, so turning the page back undoes it. Which way the display turns (clockwise
-    or not) is assumed, not checked on hardware; a 90 / 270 view may come out upside down."""
-    return (-tft_orientation) % 360
+    records (nextion_tools.tft.orientation). A TFT stores its pictures in that frame: one made at
+    90 holds each picture turned 90 degrees clockwise (checked on demo/demo.tft, whose picture
+    matches its upright original turned that way), so the frame is the page turned clockwise by
+    the orientation. 180 and 270 are taken to follow."""
+    return tft_orientation % 360
 
 
 def save_png(pixels: np.ndarray, path: str) -> None:

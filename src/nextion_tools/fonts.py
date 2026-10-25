@@ -4,7 +4,8 @@ A font is a 44-byte header, the font and encoding names, a character map, and on
 character:
 
    0x00  3   magic 04 FF 00
-   0x04  2   code page
+   0x03  1   0x0A in fonts from older Editors, 0x0B in fonts the 2026 Editor stores (see below)
+   0x04  2   code page (0x218 utf-8, 3 iso-8859-1)
    0x06  1   fixed character width, 0 = variable
    0x07  1   character height
    0x0C  4   number of characters
@@ -34,6 +35,11 @@ token per byte, that fills the box row by row from the top left:
 
 A stream may stop before the box is full, and the rest of the box is transparent.
 
+A 0x0B font in a project whose display direction is not 0 stores each glyph turned clockwise
+by that direction, as the display's own frame holds it (the TFT's pictures are turned the same
+way): at 90 the stream fills the box's columns, bottom to top, rather than its rows. That is
+from one project, made at 90 (demo/demo.HMI); 0x0A fonts are stored upright at every direction.
+
 The token encoding is from hagronnestad/nextion-font-editor ("Nextion Font Format Specification ZI
 version 5"). Where the map starts, and the overhangs, were worked out from this project's fonts.
 """
@@ -43,6 +49,7 @@ import numpy as np
 
 HEADER = 44
 MAGIC = b'\x04\xff\x00'
+ROTATING_FORMAT = 0x0B  # header byte 3 from which glyphs are stored as the display's frame holds them
 
 
 class Glyph:
@@ -60,11 +67,12 @@ class Glyph:
 
 
 class Font:
-    def __init__(self, name, encoding, height, version, glyphs):
+    def __init__(self, name, encoding, height, version, glyphs, turned=0):
         self.name = name
         self.encoding = encoding
         self.height = height
         self.version = version
+        self.turned = turned  # degrees clockwise the glyphs were stored turned
         self.glyphs = glyphs  # code -> Glyph
 
     def glyph(self, char):
@@ -80,9 +88,10 @@ class Font:
         return sum(g.advance for g in map(self.glyph, text) if g is not None)
 
 
-def decode(data, width, height):
+def decode(data, width, height, turned=0):
     """(coverage, pixels coded) for one glyph's data: coverage is a height x width uint8 array.
-    Pixels past the box are dropped; pixels the stream does not reach are clear."""
+    Pixels past the box are dropped; pixels the stream does not reach are clear. `turned` is how
+    far clockwise the glyph is stored turned, in degrees; coverage is upright whatever it is."""
     px = []
     for b in data[1:]:
         kind = b >> 6
@@ -100,15 +109,26 @@ def decode(data, width, height):
     n = width * height
     out = np.zeros(n, dtype=np.uint8)
     out[:min(n, len(px))] = px[:n]
-    return out.reshape(height, width), len(px)
+    if turned % 180:
+        width, height = height, width
+    return np.ascontiguousarray(np.rot90(out.reshape(height, width), k=turned // 90)), len(px)
 
 
 def _level(c):
     return c * 255 // 7
 
 
-def parse(data):
-    """A Font from the bytes of one .zi."""
+def stored_turned(data, direction):
+    """Degrees clockwise a .zi's glyphs are stored turned, in a project whose display direction
+    is `direction` (Project.direction)."""
+    return direction % 360 if data[3] >= ROTATING_FORMAT else 0
+
+
+def parse(data, turned=0):
+    """A Font from the bytes of one .zi whose glyphs are stored `turned` degrees clockwise (see
+    stored_turned)."""
+    if turned % 90:
+        raise ValueError("turned must be a multiple of 90, not %r" % turned)
     if data[:3] != MAGIC:
         raise ValueError('not a .zi font')
     height = data[7]
@@ -124,6 +144,7 @@ def parse(data):
         code, advance, left, right = struct.unpack_from('<HBBB', data, o)
         offset = int.from_bytes(data[o + 5:o + 8], 'little')
         length = struct.unpack_from('<H', data, o + 8)[0]
-        coverage, coded = decode(data[table + offset:table + offset + length], left + advance + right, height)
+        coverage, coded = decode(data[table + offset:table + offset + length], left + advance + right, height,
+                                 turned)
         glyphs[code] = Glyph(code, advance, left, right, coverage, coded)
-    return Font(name, encoding, height, data[0x10], glyphs)
+    return Font(name, encoding, height, data[0x10], glyphs, turned)
