@@ -8,6 +8,9 @@ Format notes, checked against the Editor's own TFTs (see tests/test_tft.py):
 - Pictures are resource 7 in the table at 0x10000: 24-byte entries (marker, index, offset, w, h,
   size, 0), then records of a 20-byte header plus data. A raw record's header is all zeros and
   its data is RGB565 little-endian; the Editor compresses some pictures, with a codec not known.
+  The 2026 Editor writes raw pictures as bare RGB565 with no record header, turned to the
+  display's frame (render.native_rotation); `raw` is false for those, and a swap must supply
+  a record in the same form.
 """
 import struct
 

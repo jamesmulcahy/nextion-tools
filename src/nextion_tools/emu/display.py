@@ -29,11 +29,18 @@ component): the display finds the component under it, sends the 0x65 events its 
 asks for, and runs its code and then the page's touch capture's. So which edges a button
 reports, the sleep frame a timer prints and the gestures a page decodes all come from the HMI.
 `scripts=False` turns this off, and touches are then bare 0x65 frames as without an HMI.
+
+With `sendxy=1` every press and release is also reported with its coordinates (0x67), and with
+`sleep=1` the screen goes dark and touches reach nothing: with `thup=1` the first one wakes the
+display (0x87) and is used up doing it. Those follow Nextion's instruction set; neither is
+measured, and whether a drag streams 0x67 frames is not known (they are sent only on press and
+release here).
 """
 
 import collections
 import logging
 import re
+import struct
 import threading
 import time
 from typing import Callable, Deque, Dict, List, Optional, Tuple, Union
@@ -215,10 +222,21 @@ class Display(UploadMixin):
             if self._touch is not None:
                 raise RuntimeError("already touching at %r" % ((self._touch.x, self._touch.y),))
             page = self._current_page()
+            if self._asleep():
+                # Nothing on the page sees it, nor its moves and release. It wakes the display
+                # if thup asks for that.
+                self._touch = _Touch(page.name, None, x, y)
+                self._report_xy(x, y, True, asleep=True)
+                if self.system.get("thup") == 1:
+                    self._store("sleep", 0)
+                    self._reply(protocol.frame(protocol.AUTO_WAKE))
+                self._cond.notify_all()
+                return
             comp = self._hit(page, x, y)
             self._touch = _Touch(page.name, comp, x, y)
             self.version += 1
             self._set_touch_point(x, y, x, y)
+            self._report_xy(x, y, True)
             log.debug("touch down at (%d, %d): %s.%s", x, y, page.name, comp.name)
             if comp.type == SLIDER_TYPE:
                 self._slide_to(page, comp, x, y)
@@ -229,7 +247,7 @@ class Display(UploadMixin):
         """The finger moves to (x, y). A slider it pressed follows it and runs its slide code."""
         with self._cond:
             touch = self._held()
-            if touch is None:
+            if touch is None or touch.component is None:
                 return
             touch.x, touch.y = x, y
             self._set_touch_point(x, y, touch.x0, touch.y0)
@@ -246,7 +264,12 @@ class Display(UploadMixin):
             self.version += 1
             if touch is None:
                 return
+            if touch.component is None:
+                self._report_xy(touch.x, touch.y, False, asleep=True)
+                self._cond.notify_all()
+                return
             self._set_touch_point(0, 0, touch.x0, touch.y0)
+            self._report_xy(touch.x, touch.y, False)
             self._touch_edge(self._current_page(), touch.component, False)
             self._cond.notify_all()
 
@@ -466,18 +489,25 @@ class Display(UploadMixin):
                     comp, _, attr = key[len(prefix):].rpartition(".")
                     values.setdefault(comp, {})[attr] = value
             touch = self._held()
+            pressed = touch.component.name if touch is not None and touch.component is not None else None
             return {"page": self.page, "values": values, "drawn": list(self.drawn), "version": self.version,
-                    "pressed": touch.component.name if touch is not None else None}
+                    "pressed": pressed, "asleep": self._asleep()}
 
     def snapshot(self, scene: Optional[Dict[str, object]] = None, rotation: Optional[int] = None):
         """What the screen shows now, as a height x width x 3 numpy array, turned by `rotation`
-        (the display's own by default). Needs numpy and Pillow (nextion-tools[images])."""
+        (the display's own by default): black while the display sleeps. Needs numpy and Pillow
+        (nextion-tools[images])."""
+        import numpy as np
         from ..render import Renderer, rotate
         scene = scene or self.scene()
         if self._renderer is None:
             self._renderer = Renderer(self.screen.hmi)
-        pixels = self._renderer.render(scene["page"], values=scene["values"], pressed=scene["pressed"],
-                                       drawn=scene["drawn"])
+        if scene.get("asleep"):
+            w, h = self.screen.hmi.page(scene["page"]).size
+            pixels = np.zeros((h, w, 3), dtype=np.uint8)
+        else:
+            pixels = self._renderer.render(scene["page"], values=scene["values"], pressed=scene["pressed"],
+                                           drawn=scene["drawn"])
         return rotate(pixels, self.rotation if rotation is None else rotation)
 
     def save_png(self, path: str) -> str:
@@ -719,8 +749,14 @@ class Display(UploadMixin):
             self._reset()
             self.boot()
             return None, 0.0, False
+        if kw == "sendme":
+            if self.page is None:
+                return protocol.INVALID, 0.0, False
+            self._reply(protocol.frame(protocol.CURRENT_PAGE, bytes([self.page_id(self.page)])))
+            return None, 0.0, False
         if kw in DRAWING:
             self.drawn.append(ins.text)
+            self.version += 1
         # The rest: recorded, not modelled.
         return protocol.CMD_OK, 0.0, False
 
@@ -735,13 +771,17 @@ class Display(UploadMixin):
                 self.bkcmd = value
             elif key in ("baud", "bauds") and isinstance(value, int) and value > 0:
                 self.flow.baud = value
+            elif key == "sleep":
+                self.version += 1
             return
         self.components[key] = value
         self.version += 1
         timer, _, attr = key.rpartition(".")
         if attr in ("en", "tim"):
-            # Assigning either restarts the countdown from now. Not measured; the HMIs rely on
-            # it, since they write sleep_display.en=1 on every touch to put the screensaver off.
+            # Assigning either restarts the countdown from now, even to a running timer. NSPanel
+            # Manager's HMIs write sleep_display.en=1 on every touch, and on a real NSPanel
+            # tapping keeps the screensaver off, so en does restart it. The Editor's simulator
+            # does not (demo/README.md). tim is not observed either way.
             tim = self._value(timer + ".tim")
             if isinstance(tim, int) and tim > 0 and self._value(timer + ".en"):
                 self._timer_due[timer] = self._clock() + tim / 1000.0
@@ -785,6 +825,16 @@ class Display(UploadMixin):
         if self._touch is not None and self._touch.page != self.page:
             self._touch = None
         return self._touch
+
+    def _asleep(self) -> bool:
+        return self.system.get("sleep") == 1
+
+    def _report_xy(self, x: int, y: int, pressed: bool, asleep: bool = False) -> None:
+        """The coordinates of a press or release, if sendxy asks for them. Before the 0x65 event,
+        an order not measured."""
+        if self.system.get("sendxy") == 1:
+            code = protocol.TOUCH_XY_ASLEEP if asleep else protocol.TOUCH_XY
+            self._reply(protocol.frame(code, struct.pack(">HHB", x, y, 1 if pressed else 0)))
 
     def _set_touch_point(self, x: int, y: int, x0: int, y0: int) -> None:
         # tch0/tch1: where the finger is now, 0 once it lifts; tch2/tch3: where it pressed.
@@ -999,9 +1049,9 @@ class Display(UploadMixin):
 
 
 class _Touch:
-    def __init__(self, page: str, component: Component, x: int, y: int):
+    def __init__(self, page: str, component: Optional[Component], x: int, y: int):
         self.page = page
-        self.component = component
+        self.component = component  # None for a touch on a sleeping display, which nothing sees
         self.x0, self.y0 = x, y
         self.x, self.y = x, y
 

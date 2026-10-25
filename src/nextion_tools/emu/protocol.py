@@ -25,9 +25,16 @@ INVALID = 0x1A
 STRING_DATA = 0x70  # answer to `get` of a string
 NUMBER_DATA = 0x71  # answer to `get` of a number: 4 bytes, little-endian, signed
 TOUCH_EVENT = 0x65  # page id, component id, 1 = press / 0 = release
+CURRENT_PAGE = 0x66  # answer to `sendme`: the page id
+# With sendxy=1: x and y (u16 big-endian), then 1 = press / 0 = release. From Nextion's
+# instruction set, not yet seen on hardware.
+TOUCH_XY = 0x67
+TOUCH_XY_ASLEEP = 0x68  # the same, for a touch while the display sleeps
 BUFFER_OVERFLOW = 0x24  # sent when the display resumes after dropping input, not when it drops it
 STARTUP = 0x00  # 00 00 00 FF FF FF at power-on (documented; not yet seen on hardware)
 READY = 0x88  # after startup (documented; not yet seen on hardware)
+# Sleeping or waking on its own (thsp, thup); `sleep=` from the MCU sends neither. From
+# Nextion's instruction set, not yet seen on hardware.
 AUTO_SLEEP = 0x86
 AUTO_WAKE = 0x87
 

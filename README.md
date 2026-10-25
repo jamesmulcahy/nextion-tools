@@ -3,6 +3,26 @@
 Tools for [Nextion](https://nextion.tech) HMI displays: the Nextion Editor's project files, the
 TFTs it compiles, and an emulator of the display itself for testing the firmware that drives one.
 
+## Try it
+
+```
+git clone https://github.com/jamesmulcahy/nextion-tools
+cd nextion-tools
+pip install -e ".[images]"
+python demo/run.py
+```
+
+Then open http://127.0.0.1:8080/ and use the panel with your mouse.
+
+![The demo's menu, thermostat, paint and pong pages, as the emulator draws them](docs/demo.png)
+
+That is an emulated Nextion display running a project made in the Nextion Editor
+(`demo/demo.HMI`), with its own touch handling, scripts and timers, and a small Python program
+(`demo/companion.py`) as the microcontroller behind it: the menu's buttons change page, the
+thermostat's bar turns red near the top, Paint draws where you drag, and Pong plays against a
+paddle that follows the pointer. The same companion drives a real display flashed with
+`demo/demo.tft`. See [The demo](#the-demo) and `demo/README.md`.
+
 | Module | What |
 |---|---|
 | `nextion_tools.hmi` | `.HMI` projects: pages, components, ids, geometry, attributes, event code, `Program.s`; numeric edits with re-stamping |
@@ -30,6 +50,16 @@ print(project.program)                      # Program.s, line by line
 ```
 
 The format notes are in the module docstrings, and were checked against files the Editor saved.
+
+## The demo
+
+`demo/` holds a small project made in the Nextion Editor (`demo.HMI`, and `demo.tft` compiled
+from it) and `companion.py`, a Python program that plays the MCU. `python demo/run.py` runs the
+whole thing (the emulated display, the companion and the browser viewer) in one process, and
+takes `--http PORT` and `--rotation 90` (the screen as the LCD itself holds it).
+`python demo/companion.py --serial /dev/ttyUSB0 --fps 8` drives a real display running
+`demo.tft`, which needs the `serial` extra. `demo/README.md` has what each page does and what
+the project turned up.
 Nextion and the Nextion Editor are ITEAD's; this project is not affiliated with them.
 
 ## The emulator
@@ -118,7 +148,10 @@ name is accepted. `resolver=` overrides the HMI with a function of your own.
   lands on the visible component drawn last at that point (else the page). It sends the 0x65
   edges the component's `sendkey` asks for, then runs the component's `down` / `up` (and a
   slider's `slide`), then the page's touch capture's, with `tch0..3` and the capture's `val`
-  set as the display sets them.
+  set as the display sets them. With `sendxy=1` each press and release is also reported with
+  its coordinates (0x67).
+- sleep: with `sleep=1` the screen is dark and touches reach nothing; with `thup=1` the first
+  one wakes the display (0x87) and is used up doing it.
 
 All of an HMI's code is compiled when the display loads it, and code outside what the
 interpreter supports is refused then (`UnsupportedCode`, naming the event and line).
@@ -131,22 +164,29 @@ an instruction would be (`1a`, `display.errors`, `display.script_errors`), and t
 For tests that need timers to fire exactly, pass `clock=ManualClock()`, then `clock.advance(s)`
 and `display.tick()`. `expire_timer(name)` runs a timer out now, whatever the clock.
 
+Observed on a real NSPanel: assigning `en=1` to a running timer restarts its countdown (tapping
+keeps NSPanel Manager's screensaver off, and each tap runs `sleep_display.en=1`). The Editor's
+Debug simulator does not restart it, so it is not a guide to this. Assigning `tim` restarts it
+too, which is not observed either way.
+
 Not measured on hardware yet, so each is a choice (see `emu/script.py` and `display.py`):
 
 - the order on a touch: the 0x65 frame, then the component's code, then the touch capture's;
-- assigning `en` or `tim` restarts a timer's countdown;
 - `&&` and `||` stop at the first operand that decides; a failed condition skips its `if`;
 - an expression mixing `+`/`-` with `*`/`/` is refused, since precedence is not known;
 - `page` ends the event that ran it;
 - a slider's value is linear in the touch position, ignoring the thumb's width;
-- whether a failed statement in event code sends `1a` at `bkcmd` 2 and 3 (assumed yes).
+- whether a failed statement in event code sends `1a` at `bkcmd` 2 and 3 (assumed yes);
+- `sendxy` and sleep follow Nextion's instruction set: 0x67 on press and release only (whether
+  a drag streams them is not known), its order before the 0x65 frame, and the waking touch
+  going nowhere.
 
 **What the screen shows.** `display.snapshot()` draws the current page as a numpy array, and
 `display.save_png(path)` saves it (both need `[images]`). They draw from the HMI and what the
 display holds now: pictures, crop pictures, text in the HMI's own fonts, buttons in their
 pressed or second state, sliders, progress bars, hidden components left out, and the drawing
-instructions sent since the page was shown (`fill`, `cls`, `pic`, `xstr`). See `render.py` for
-what is and is not drawn.
+instructions sent since the page was shown (`fill`, `cls`, `pic`, `xstr`, `line`, `draw`,
+`cir`, `cirs`). A sleeping display is black. See `render.py` for what is and is not drawn.
 
 **In a browser.** `python -m nextion_tools.emu.viewer --hmi gui.HMI --tcp 4000` runs a display
 and serves it on http://127.0.0.1:8080/. A press on the screen is a finger going down there, a
@@ -159,7 +199,9 @@ TFT intends (NSPanel's US pages are 320 x 480, its EU pages 480 x 320), and touc
 frame, so pictures and the viewer are upright by default. `Display(rotation=90)` turns snapshots
 and the viewer clockwise, and maps clicks back, to show a panel as it actually hangs.
 `render.native_rotation(tft.orientation(data))` gives the rotation that shows the LCD's own
-frame.
+frame, the one a TFT stores its pictures in: a TFT made at 90 holds them turned 90 degrees
+clockwise (`demo/demo.tft`). `Project.direction` is the same setting, read from the HMI.
+Fonts from recent Editors are stored turned that way too, and are read upright.
 
 ## Not modelled (yet)
 
@@ -175,8 +217,9 @@ pip install -e ".[images,serial,test]"
 python -m pytest
 ```
 
-Most tests build small projects in code (`tests/hmi_builder.py`). The rest need files the
-Editor made, and are skipped unless given them:
+Most tests build small projects in code (`tests/hmi_builder.py`), and some use the demo's
+files, which the Editor made. The rest need NSPanel Manager's project and TFT, and are skipped
+unless given them:
 
 ```
 NEXTION_TOOLS_HMI=path/to/gui.HMI NEXTION_TOOLS_TFT=path/to/gui.tft python -m pytest

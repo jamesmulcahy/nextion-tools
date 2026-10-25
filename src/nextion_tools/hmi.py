@@ -9,11 +9,12 @@ The format, as far as it is used here:
 - The file starts with a directory: a u32 entry count, then 28-byte entries of name[16],
   offset:u32, size:u32, flags:u32. An entry whose flags have bit 0 set, or whose name is empty,
   is stale (left over from an earlier save).
-- `main.HMI` lists the project's resources in order, from offset 96, 16 bytes each with the
-  block's name at +8: pictures (.i), fonts (.zi) and pages (.pa). A resource's id is its
-  position among the blocks of its own kind. So a page's id (what `page N` and touch events use)
-  and a font's index (what a component's `font` holds) are positions in that list, not the
-  numbers in the blocks' names.
+- `main.HMI` holds the display direction at 0x0C, in 90 degree steps (the Editor's device
+  setting, which a compiled TFT records too), and lists the project's resources in order, from
+  offset 96, 16 bytes each with the block's name at +8: pictures (.i), fonts (.zi) and pages
+  (.pa). A resource's id is its position among the blocks of its own kind. So a page's id (what
+  `page N` and touch events use) and a font's index (what a component's `font` holds) are
+  positions in that list, not the numbers in the blocks' names.
 - A page block (`N.pa`) has a 56-byte header (u32 stamp, u32 block length, u32 header length
   = 56, u32 component count, ..., name[16] at 24) and a table of (offset, length, _) per
   component, offsets from the end of the header.
@@ -79,6 +80,7 @@ TOUCHCAP_TYPE = 5
 TIMER_TYPE = 51
 
 PROGRAM_BLOCK = "Program.s"
+MAIN_DIRECTION = 0x0C  # main.HMI: the display direction, in 90 degree steps
 
 # `sendkey` bits: which touch edges the display reports for the component ("Send Component ID").
 # Inferred from NSPanel Manager's firmware, whose handlers act only on release for sendkey 1 and
@@ -286,7 +288,9 @@ class Picture:
     @property
     def raw(self) -> bool:
         """Whether the record is plain RGB565 (little-endian), as the panel shows it. The Editor
-        compresses some pictures, with a codec not known; their original file still holds them."""
+        compresses some pictures, with a codec not known; their original file still holds them.
+        The 2026 Editor stores records with no header, turned to the display's frame (see
+        render.native_rotation); those count as not raw, and are drawn from the original too."""
         return len(self.record) == self.RECORD_HEADER + 2 * self.width * self.height
 
     @property
@@ -346,6 +350,12 @@ class Project:
         return [main[96 + 16 * i + 8:96 + 16 * i + 16].split(b"\0")[0].decode("latin1") for i in range(count)]
 
     @property
+    def direction(self) -> int:
+        """The display direction in degrees, as the Editor's device settings give it: 90 and 270
+        are landscape on a 480x320 display, 0 and 180 portrait."""
+        return self.block(self.live["main.HMI"])[MAIN_DIRECTION] * 90
+
+    @property
     def picture_count(self) -> int:
         return sum(1 for r in self.resources() if r.endswith(".i"))
 
@@ -388,7 +398,8 @@ class Project:
         Needs numpy."""
         if self._fonts is None:
             from . import fonts
-            self._fonts = [fonts.parse(block) for _, block in self.font_blocks()]
+            self._fonts = [fonts.parse(block, fonts.stored_turned(block, self.direction))
+                           for _, block in self.font_blocks()]
         return self._fonts
 
     def block(self, entry: Entry) -> bytes:
