@@ -3,6 +3,26 @@
 Tools for [Nextion](https://nextion.tech) HMI displays: the Nextion Editor's project files, the
 TFTs it compiles, and an emulator of the display itself for testing the firmware that drives one.
 
+## Try it
+
+```
+git clone https://github.com/jamesmulcahy/nextion-tools
+cd nextion-tools
+pip install -e ".[images]"
+python demo/run.py
+```
+
+Then open http://127.0.0.1:8080/ and use the panel with your mouse.
+
+![The demo's menu, thermostat, paint and pong pages, as the emulator draws them](docs/demo.png)
+
+That is an emulated Nextion display running a project made in the Nextion Editor
+(`demo/demo.HMI`), with its own touch handling, scripts and timers, and a small Python program
+(`demo/companion.py`) as the microcontroller behind it: the menu's buttons change page, the
+thermostat's bar turns red near the top, Paint draws where you drag, and Pong plays against a
+paddle that follows the pointer. The same companion drives a real display flashed with
+`demo/demo.tft`. See [The demo](#the-demo) and `demo/README.md`.
+
 | Module | What |
 |---|---|
 | `nextion_tools.hmi` | `.HMI` projects: pages, components, ids, geometry, attributes, event code, `Program.s`; numeric edits with re-stamping |
@@ -34,11 +54,12 @@ The format notes are in the module docstrings, and were checked against files th
 ## The demo
 
 `demo/` holds a small project made in the Nextion Editor (`demo.HMI`, and `demo.tft` compiled
-from it) and `companion.py`, a Python program that plays the MCU: the menu's buttons change
-page, a thermostat page's bar changes colour, Paint draws where the finger goes and Pong plays
-against it. `python demo/run.py` runs the whole thing (the emulated display, the companion and
-the browser viewer) in one process; `companion.py --serial /dev/ttyUSB0` drives a real display
-running `demo.tft`. See `demo/README.md`.
+from it) and `companion.py`, a Python program that plays the MCU. `python demo/run.py` runs the
+whole thing (the emulated display, the companion and the browser viewer) in one process, and
+takes `--http PORT` and `--rotation 90` (the screen as the LCD itself holds it).
+`python demo/companion.py --serial /dev/ttyUSB0 --fps 8` drives a real display running
+`demo.tft`, which needs the `serial` extra. `demo/README.md` has what each page does and what
+the project turned up.
 Nextion and the Nextion Editor are ITEAD's; this project is not affiliated with them.
 
 ## The emulator
