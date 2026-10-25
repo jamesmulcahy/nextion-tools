@@ -129,6 +129,7 @@ class Viewer:
                 "overflows": flow.overflows,
                 "lost": len(flow.lost),
                 "touching": d._touch is not None,
+                "asleep": d._asleep(),
             }
 
     def touch(self, kind: str, x: int, y: int) -> None:
@@ -212,7 +213,7 @@ frame.addEventListener("pointercancel", lift);
 async function poll() {
   try {
     const s = await (await fetch("/state")).json();
-    document.getElementById("page").textContent = s.page === null ? "–" : s.page + " (id " + s.page_id + ")";
+    document.getElementById("page").textContent = s.page === null ? "–" : s.page + " (id " + s.page_id + ")" + (s.asleep ? ", asleep" : "");
     document.getElementById("connected").textContent = s.connected ? "connected" : "not connected";
     document.getElementById("bkcmd").textContent = s.bkcmd;
     document.getElementById("count").textContent = s.command_count;

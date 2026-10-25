@@ -90,6 +90,22 @@ def test_drawing_instructions(project):
     assert colour(Renderer(project).render("q", drawn=["cls BLUE"]), 3, 3) == rgb(BLUE)
 
 
+def test_lines_rectangles_and_circles(project):
+    def ink(drawn):
+        fb = Renderer(project).render("q", drawn=["cls BLACK"] + drawn)
+        return {(x, y) for y in range(fb.shape[0]) for x in range(fb.shape[1]) if colour(fb, x, y) != rgb(BLACK)}
+
+    assert ink(["line 0,0,3,3,WHITE"]) == {(0, 0), (1, 1), (2, 2), (3, 3)}
+    assert ink(["line 1,5,6,5,WHITE"]) == {(x, 5) for x in range(1, 7)}
+    box = ink(["draw 1,1,4,3,WHITE"])
+    assert box == {(x, y) for x in range(1, 5) for y in range(1, 4)} - {(2, 2), (3, 2)}
+    dot = ink(["cirs 3,3,1,WHITE"])  # whether the corners are in is not known for a real display
+    assert {(3, 2), (2, 3), (3, 3), (4, 3), (3, 4)} <= dot <= {(x, y) for x in (2, 3, 4) for y in (2, 3, 4)}
+    ring = ink(["cir 3,3,2,WHITE"])
+    assert (3, 3) not in ring and {(1, 3), (5, 3), (3, 1), (3, 5)} <= ring
+    assert ink(["cirs 7,5,3,WHITE"]) <= {(x, y) for x in range(8) for y in range(6)}  # clipped, not wrapped
+
+
 def test_a_font_much_taller_than_its_field_is_replaced_and_recorded():
     big = make_zi("big", 9, [(ord("a"), 2, 0, 0, bytes([0x01]))])
     hmi = Project.parse(build([page("p", [component("t", 116, area(0, 0, 4, 2, sta=1, font=1, txt="a"))])],

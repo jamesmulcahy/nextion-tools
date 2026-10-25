@@ -22,7 +22,9 @@ What is drawn, per component type, as the Nextion Editor's attributes describe i
 - progress bar: `sta` 0 `bco` with `val` percent in `pco`, 1 pictures `bpic` / `ppic`;
 - hotspots, timers, variables and touch captures draw nothing;
 - then the drawing instructions since the page was shown, in order: `fill`, `cls`, `pic`,
-  `xstr`.
+  `xstr`, `line`, `draw` (a rectangle's outline), `cir` and `cirs` (a circle's outline, and a
+  filled one). Lines and circles are plotted as the obvious pixels, not checked against a
+  display.
 
 Pixel-exact for pictures and glyphs, which come from the HMI as they are; everything is rounded
 to RGB565 as the panel does. Not modelled: anti-aliasing against the background beyond simple
@@ -281,6 +283,25 @@ class Renderer:
             fb[y0:y1, x0:x1] = rgb(colour)
 
     @staticmethod
+    def _plot(fb, xs: np.ndarray, ys: np.ndarray, colour: int) -> None:
+        keep = (xs >= 0) & (xs < fb.shape[1]) & (ys >= 0) & (ys < fb.shape[0])
+        fb[ys[keep], xs[keep]] = rgb(colour)
+
+    def _line(self, fb, x0: int, y0: int, x1: int, y1: int, colour: int) -> None:
+        steps = max(abs(x1 - x0), abs(y1 - y0)) + 1
+        xs = np.rint(np.linspace(x0, x1, steps)).astype(int)
+        ys = np.rint(np.linspace(y0, y1, steps)).astype(int)
+        self._plot(fb, xs, ys, colour)
+
+    def _circle(self, fb, cx: int, cy: int, r: int, colour: int, filled: bool) -> None:
+        if r < 0:
+            return
+        ys, xs = np.mgrid[cy - r:cy + r + 1, cx - r:cx + r + 1]
+        d = np.hypot(xs - cx, ys - cy)
+        inside = d <= r + 0.5 if filled else np.abs(d - r) < 0.5
+        self._plot(fb, xs[inside], ys[inside], colour)
+
+    @staticmethod
     def _blit(fb, pixels: Optional[np.ndarray], x: int, y: int) -> None:
         if pixels is None:
             return
@@ -310,6 +331,17 @@ class Renderer:
                 self._fill(fb, x, y, w, h, _colour(parts[4]))
             elif keyword == "cls" and len(parts) == 1:
                 fb[:] = rgb(_colour(parts[0]))
+            elif keyword in ("line", "draw") and len(parts) == 5:
+                x0, y0, x1, y1 = (int(v) for v in parts[:4])
+                colour = _colour(parts[4])
+                if keyword == "line":
+                    self._line(fb, x0, y0, x1, y1, colour)
+                else:
+                    for a, b, c, d in ((x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)):
+                        self._line(fb, a, b, c, d, colour)
+            elif keyword in ("cir", "cirs") and len(parts) == 4:
+                x, y, r = (int(v) for v in parts[:3])
+                self._circle(fb, x, y, r, _colour(parts[3]), keyword == "cirs")
             elif keyword == "pic" and len(parts) == 3:
                 self._blit(fb, self.picture(int(parts[2])), int(parts[0]), int(parts[1]))
             elif keyword == "xstr" and len(parts) >= 11:
