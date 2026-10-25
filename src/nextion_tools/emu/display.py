@@ -778,8 +778,10 @@ class Display(UploadMixin):
         self.version += 1
         timer, _, attr = key.rpartition(".")
         if attr in ("en", "tim"):
-            # Assigning either restarts the countdown from now. Not measured; the HMIs rely on
-            # it, since they write sleep_display.en=1 on every touch to put the screensaver off.
+            # Assigning either restarts the countdown from now, even to a running timer. NSPanel
+            # Manager's HMIs write sleep_display.en=1 on every touch, and on a real NSPanel
+            # tapping keeps the screensaver off, so en does restart it. The Editor's simulator
+            # does not (demo/README.md). tim is not observed either way.
             tim = self._value(timer + ".tim")
             if isinstance(tim, int) and tim > 0 and self._value(timer + ".en"):
                 self._timer_due[timer] = self._clock() + tim / 1000.0

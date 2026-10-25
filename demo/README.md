@@ -58,9 +58,13 @@ And it drove the emulator to model `sendxy`, `sleep` and `thup`, `sendme`, and t
 
 ## Open questions
 
-The Editor's Debug simulator, or a real display, would answer these:
+A real display would answer these; the Editor's Debug simulator cannot drag, and draws nothing
+the MCU sends unless typed in by hand:
 
 - Does a drag with `sendxy=1` stream 0x67 frames, or only press and release (as modelled)?
-- On `dial`, does touching the page restart the 10 s idle timer (`tm_idle.en=1` while it is
-  already on)? The emulator assumes so.
 - Do `cirs` circles of radius 1 include their corners?
+
+Settled: on `dial`, touching the page runs `tm_idle.en=1`, which in the simulator does not
+restart the 10 s timer (it goes back to the menu 10 s after the page opened). On a real NSPanel
+the same write does restart a running timer, which is what keeps its screensaver off while you
+tap. The emulator follows the hardware.

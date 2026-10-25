@@ -143,10 +143,14 @@ an instruction would be (`1a`, `display.errors`, `display.script_errors`), and t
 For tests that need timers to fire exactly, pass `clock=ManualClock()`, then `clock.advance(s)`
 and `display.tick()`. `expire_timer(name)` runs a timer out now, whatever the clock.
 
+Observed on a real NSPanel: assigning `en=1` to a running timer restarts its countdown (tapping
+keeps NSPanel Manager's screensaver off, and each tap runs `sleep_display.en=1`). The Editor's
+Debug simulator does not restart it, so it is not a guide to this. Assigning `tim` restarts it
+too, which is not observed either way.
+
 Not measured on hardware yet, so each is a choice (see `emu/script.py` and `display.py`):
 
 - the order on a touch: the 0x65 frame, then the component's code, then the touch capture's;
-- assigning `en` or `tim` restarts a timer's countdown;
 - `&&` and `||` stop at the first operand that decides; a failed condition skips its `if`;
 - an expression mixing `+`/`-` with `*`/`/` is refused, since precedence is not known;
 - `page` ends the event that ran it;
