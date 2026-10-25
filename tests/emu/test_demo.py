@@ -208,3 +208,23 @@ def test_sleep_from_the_menu_and_wake_with_a_touch(demo):
     time.sleep(0.2)
     assert display.page == "menu"  # the waking touch went nowhere
     assert (0x87, b"") in companion.received
+
+
+def test_paint_ignores_a_sample_of_0_0_which_is_what_the_display_reads_with_no_finger(demo):
+    display, companion = demo
+    display.press("b_paint", hold=0.02)
+    display.wait_for(lambda d: d.page == "paint" and d.system.get("sendxy") == 1, timeout=5, what="paint")
+    display.touch_down(200, 200)
+    try:
+        display.touch_move(0, 0)
+        time.sleep(0.3)
+        display.touch_move(220, 240)
+        display.wait_for(lambda d: "line 200,200,220,240,0" in d.drawn, timeout=5, what="a line from the press")
+    finally:
+        display.touch_up()
+    points = []
+    for instruction in display.drawn:
+        keyword, args = instruction.split(" ", 1)
+        v = [int(a) for a in args.split(",")]
+        points += [(v[0], v[1]), (v[2], v[3])] if keyword == "line" else [(v[0], v[1])]
+    assert (0, 0) not in points

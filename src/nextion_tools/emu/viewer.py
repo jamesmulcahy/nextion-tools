@@ -192,11 +192,14 @@ PAGE = r"""<!doctype html>
 </main>
 <script>
 const frame = document.getElementById("frame");
-let shown = -1, down = false, lastMove = 0;
+// size: the shown frame's own pixels. Taken when a frame has loaded, since naturalWidth can be
+// 0 while the next one loads, which would put every touch then at (0, 0).
+let shown = -1, down = false, lastMove = 0, size = null;
 function post(kind, e) {
+  if (!size) return Promise.resolve();
   const r = frame.getBoundingClientRect();
-  const x = Math.floor((e.clientX - r.left) * frame.naturalWidth / r.width);
-  const y = Math.floor((e.clientY - r.top) * frame.naturalHeight / r.height);
+  const x = Math.floor((e.clientX - r.left) * size[0] / r.width);
+  const y = Math.floor((e.clientY - r.top) * size[1] / r.height);
   return fetch("/touch", {method: "POST", headers: {"Content-Type": "application/json"},
                           body: JSON.stringify({kind, x, y})});
 }
@@ -228,7 +231,13 @@ async function poll() {
     ov.textContent = s.overflows + (s.lost ? " (" + s.lost + " lost)" : ""); ov.className = s.overflows ? "bad" : "";
     document.getElementById("commands").textContent = s.commands.slice().reverse().join("\n");
     document.getElementById("rejected").textContent = s.errors.slice().reverse().map(e => e[0]).join("\n");
-    if (s.version !== shown && s.page !== null) { shown = s.version; frame.src = "/frame.png?v=" + s.version; }
+    if (s.version !== shown && s.page !== null) {
+      // Load the frame off screen, then swap it in, so the one shown is always complete.
+      shown = s.version;
+      const next = new Image();
+      next.onload = () => { if (next.src.endsWith("v=" + shown)) { frame.src = next.src; size = [next.naturalWidth, next.naturalHeight]; } };
+      next.src = "/frame.png?v=" + s.version;
+    }
   } catch (err) { document.getElementById("connected").textContent = "viewer unreachable"; }
   setTimeout(poll, 200);
 }

@@ -74,6 +74,7 @@ class Companion:
         self.period = 1.0 / fps
         self.page: Optional[str] = None  # what the display shows, as far as the companion knows
         self.touching: Optional[Tuple[int, int]] = None  # the finger, while one is down (sendxy)
+        self.strokes = 0  # presses and releases seen (sendxy), so a poll can tell it is stale
         self.game = None  # Paint or Pong, on their pages
         self.received: Deque[Tuple[int, bytes]] = collections.deque(maxlen=1000)  # (code, payload)
         self._buf = b""
@@ -167,6 +168,7 @@ class Companion:
         elif code == 0x67:
             x, y, state = struct.unpack(">HHB", payload)
             self.touching = (x, y) if state else None
+            self.strokes += 1
             if self.game is not None:
                 self.game.touched(x, y, bool(state))
         elif code == 0x71 and self._gets:
@@ -210,10 +212,15 @@ class Game:
 
     def tick(self) -> None:
         if self.c.touching is not None and not self.c.waiting:
-            self.c.get("tch0", lambda x: self.c.get("tch1", lambda y: self._polled(x, y)))
+            strokes = self.c.strokes
+            point = []
+            self.c.get("tch0", point.append)
+            self.c.get("tch1", lambda y: self._polled(strokes, point[0], y))
 
-    def _polled(self, x: int, y: int) -> None:
-        if self.c.touching is not None:  # still down: a release since would make these 0
+    def _polled(self, strokes: int, x: int, y: int) -> None:
+        # Only a sample from the same touch as the poll, with the finger still down: the display
+        # reads 0, 0 once it lifts.
+        if self.c.touching is not None and self.c.strokes == strokes and (x, y) != (0, 0):
             self.c.touching = (x, y)
             self.moved(x, y)
 
