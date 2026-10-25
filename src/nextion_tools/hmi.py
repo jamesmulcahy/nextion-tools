@@ -24,6 +24,11 @@ The format, as far as it is used here:
   is component 0 (type 121), and the page's own events (load, loadend, unload) are stored there.
 - `Program.s` is the start-up code as plain text (CRLF lines): its globals (`int a=0,b=0`), then
   usually `page 0`. It runs once at power-on.
+- A picture is two blocks with the same stem. `N.i` is what the TFT gets: a header (u32 magic,
+  u32 0, u32 header length, u16 width, u16 height at 12, ...) and then the record a compiled TFT
+  stores (raw RGB565 or compressed). `N.is` is the file that was imported, byte for byte, after a
+  27-byte header (the same magic, width and height at 12, u32 file length at 16, and a
+  three-letter format at 24, "png" or "bmp").
 
 `apply_edits` only changes numeric attributes (same width, so no block moves), keeps endx/endy
 in step with x/y/w/h, and re-stamps each edited page.
@@ -264,6 +269,31 @@ def _records(block: bytes, start: int, length: int, where: str):
     return fields, events
 
 
+class Picture:
+    """One picture: its size, the record a TFT stores, and the file it was imported from."""
+
+    RECORD_HEADER = 20
+
+    def __init__(self, picture_id: int, width: int, height: int, record: bytes, original: bytes, fmt: str):
+        self.id, self.width, self.height = picture_id, width, height
+        self.record = record  # 20-byte record header, then the data
+        self.original = original  # the imported file
+        self.format = fmt  # "png" or "bmp"
+
+    def __repr__(self) -> str:
+        return "<Picture %d %dx%d>" % (self.id, self.width, self.height)
+
+    @property
+    def raw(self) -> bool:
+        """Whether the record is plain RGB565 (little-endian), as the panel shows it. The Editor
+        compresses some pictures, with a codec not known; their original file still holds them."""
+        return len(self.record) == self.RECORD_HEADER + 2 * self.width * self.height
+
+    @property
+    def rgb565(self) -> Optional[bytes]:
+        return self.record[self.RECORD_HEADER:] if self.raw else None
+
+
 class Project:
     """A .HMI project: its pages by name and by id, and its resources."""
 
@@ -332,6 +362,22 @@ class Project:
                 block = self.block(self.live[name])
                 records.append(block[struct.unpack_from("<I", block, 8)[0]:])
         return records
+
+    def picture(self, picture_id: int) -> Picture:
+        """Picture `picture_id` (a component's `pic`). KeyError if there is none."""
+        names = [r for r in self.resources() if r.endswith(".i")]
+        if not 0 <= picture_id < len(names):
+            raise KeyError("no picture %d (the project has %d)" % (picture_id, len(names)))
+        block = self.block(self.live[names[picture_id]])
+        header = struct.unpack_from("<I", block, 8)[0]
+        width, height = struct.unpack_from("<HH", block, 12)
+        original, fmt = b"", ""
+        source = self.live.get(names[picture_id][:-2] + ".is")
+        if source is not None:
+            s = self.block(source)
+            start, length = struct.unpack_from("<I", s, 8)[0], struct.unpack_from("<I", s, 16)[0]
+            original, fmt = s[start:start + length], s[24:27].split(b"\0")[0].decode("latin1")
+        return Picture(picture_id, width, height, block[header:], original, fmt)
 
     def font_blocks(self) -> List[Tuple[str, bytes]]:
         """The .zi blocks in font index order, byte for byte (re-importable into the Editor)."""

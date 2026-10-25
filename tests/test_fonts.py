@@ -1,32 +1,11 @@
 """The .zi decoder on hand-made data."""
 
-import struct
-
 import pytest
 
 pytest.importorskip("numpy")
 
+from hmi_builder import make_zi  # noqa: E402
 from nextion_tools import fonts  # noqa: E402
-
-
-def make_zi(name, height, glyphs, encoding="utf-8"):
-    """A .zi holding glyphs of (code, advance, left, right, data), laid out as the Editor does."""
-    names = name.encode() + encoding.encode()
-    header = bytearray(fonts.HEADER)
-    header[0:3] = fonts.MAGIC
-    header[7] = height
-    struct.pack_into("<I", header, 0x0C, len(glyphs))
-    header[0x10] = 6
-    header[0x11] = len(names)
-    struct.pack_into("<I", header, 0x20, len(name))
-    table = bytearray()
-    data = bytearray()
-    for code, advance, left, right, glyph_data in glyphs:
-        offset = 10 * len(glyphs) + len(data)
-        table += struct.pack("<HBBB", code, advance, left, right) + offset.to_bytes(3, "little")
-        table += struct.pack("<H", len(glyph_data))
-        data += glyph_data
-    return bytes(header) + names + bytes(table) + bytes(data)
 
 
 def decode(tokens, width, height):

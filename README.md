@@ -10,11 +10,12 @@ TFTs it compiles, and an emulator of the display itself for testing the firmware
 | `nextion_tools.images` | pictures as RGB arrays, and the panel's RGB565 |
 | `nextion_tools.tft` | a compiled `.tft`: its picture table, checksums and orientation, and same-size picture swaps |
 | `nextion_tools.crc` | the CRC behind TFT checksums and HMI page stamps |
+| `nextion_tools.render` | draws a page as the display shows it, from the HMI and the values its components hold |
 | `nextion_tools.emu` | an emulated display, driven by the project's HMI (below) |
 
 ```
 pip install nextion-tools            # hmi, tft, crc and the emulator: no dependencies
-pip install nextion-tools[images]    # fonts and pictures: numpy and Pillow
+pip install nextion-tools[images]    # fonts, pictures, rendering and the viewer: numpy and Pillow
 pip install nextion-tools[serial]    # the emulator on a real serial port: pyserial
 ```
 
@@ -140,9 +141,30 @@ Not measured on hardware yet, so each is a choice (see `emu/script.py` and `disp
 - a slider's value is linear in the touch position, ignoring the thumb's width;
 - whether a failed statement in event code sends `1a` at `bkcmd` 2 and 3 (assumed yes).
 
+**What the screen shows.** `display.snapshot()` draws the current page as a numpy array, and
+`display.save_png(path)` saves it (both need `[images]`). They draw from the HMI and what the
+display holds now: pictures, crop pictures, text in the HMI's own fonts, buttons in their
+pressed or second state, sliders, progress bars, hidden components left out, and the drawing
+instructions sent since the page was shown (`fill`, `cls`, `pic`, `xstr`). See `render.py` for
+what is and is not drawn.
+
+**In a browser.** `python -m nextion_tools.emu.viewer --hmi gui.HMI --tcp 4000` runs a display
+and serves it on http://127.0.0.1:8080/. A press on the screen is a finger going down there, a
+drag moves it, and the side panel shows the page, the last instructions, rejected ones, and the
+input buffer when the flow model is on. `Viewer(display)` attaches one to a display a test or rig
+already has.
+
+**Orientation.** A page's coordinates are the view of someone looking at a panel mounted as its
+TFT intends (NSPanel's US pages are 320 x 480, its EU pages 480 x 320), and touches use the same
+frame, so pictures and the viewer are upright by default. `Display(rotation=90)` turns snapshots
+and the viewer clockwise, and maps clicks back, to show a panel as it actually hangs.
+`render.native_rotation(tft.orientation(data))` gives the rotation that shows the LCD's own
+frame.
+
 ## Not modelled (yet)
 
-- **Rendering.** The model is attributes, not pixels.
+- **Pixel-exact rendering.** Pictures and glyphs are exact; borders, the Editor's compressed
+  pictures (drawn from the file they were imported from) and some component types are not.
 - **Drawing instructions** in event code (`xstr`, `fill`, ...) and `click`, `tsw`, loops: the
   HMIs tested do not use them, so they are refused rather than guessed at.
 

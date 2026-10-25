@@ -57,6 +57,9 @@ REDRAW_S = NX4832T035.redraw_s
 
 _DELAY = re.compile(r"^delay=(\d+)$")
 
+# Instructions that draw straight onto the screen, kept for snapshot() until the page changes.
+DRAWING = frozenset({"fill", "cls", "pic", "xstr", "picq", "xpic", "line", "draw", "cir", "cirs"})
+
 # How deep event code may nest (a load that changes page, whose load changes page, ...).
 MAX_EVENT_DEPTH = 8
 
@@ -72,6 +75,7 @@ class Display(UploadMixin):
                  startup_frames: bool = False, flash_size: Optional[int] = None,
                  resolver: Optional[Resolver] = None, hmi: Optional[Project] = None,
                  scripts: bool = True, overrides: Optional[Dict[str, Override]] = None,
+                 rotation: int = 0,
                  clock: Callable[[], float] = time.monotonic):
         # The device's measurements, each of which a keyword argument may override.
         self.device = device
@@ -91,6 +95,16 @@ class Display(UploadMixin):
         self.system: Dict[str, Value] = {}  # dim, sleep, thsp, ...
         self.commands: List[str] = []  # every instruction executed, in order
         self.errors: List[Tuple[str, int]] = []  # (instruction, code) for every one that failed
+        # Drawing instructions (fill, xstr, ...) since the page was shown, for snapshot().
+        self.drawn: List[str] = []
+        # Goes up whenever what the screen shows may have changed; a viewer redraws when it does.
+        self.version = 0
+        self._renderer = None
+        # Degrees clockwise to turn snapshots (and the viewer); 0 shows pages upright, in the
+        # HMI's own coordinates. See render.py.
+        if rotation % 90:
+            raise ValueError("rotation must be a multiple of 90, not %r" % rotation)
+        self.rotation = rotation % 360
         self.bkcmd = protocol.BKCMD_DEFAULT
         # Called while waiting; raises to abort the wait (e.g. when the emulated MCU crashed).
         self.abort_check: Optional[Callable[[], None]] = None
@@ -203,6 +217,7 @@ class Display(UploadMixin):
             page = self._current_page()
             comp = self._hit(page, x, y)
             self._touch = _Touch(page.name, comp, x, y)
+            self.version += 1
             self._set_touch_point(x, y, x, y)
             log.debug("touch down at (%d, %d): %s.%s", x, y, page.name, comp.name)
             if comp.type == SLIDER_TYPE:
@@ -228,6 +243,7 @@ class Display(UploadMixin):
         """The finger lifts. The release goes to what it pressed, wherever it is now."""
         with self._cond:
             touch, self._touch = self._held(), None
+            self.version += 1
             if touch is None:
                 return
             self._set_touch_point(0, 0, touch.x0, touch.y0)
@@ -435,6 +451,41 @@ class Display(UploadMixin):
         """Until everything received has been executed and every reply sent."""
         self.wait_for(lambda n: (not n.flow_model or n.flow.idle) and not n._outbox_busy(), timeout, "display idle")
 
+    # ---- what the screen shows ---------------------------------------------------------------
+
+    def scene(self) -> Dict[str, object]:
+        """What snapshot() draws, copied under the lock: the page, every attribute assigned on
+        it, the component being pressed, and the drawing instructions since it was shown."""
+        with self._cond:
+            if self.screen is None or self.page is None:
+                raise RuntimeError("a snapshot needs an HMI")
+            prefix = self.page + "."
+            values: Dict[str, Dict[str, Value]] = {}
+            for key, value in self.components.items():
+                if key.startswith(prefix):
+                    comp, _, attr = key[len(prefix):].rpartition(".")
+                    values.setdefault(comp, {})[attr] = value
+            touch = self._held()
+            return {"page": self.page, "values": values, "drawn": list(self.drawn), "version": self.version,
+                    "pressed": touch.component.name if touch is not None else None}
+
+    def snapshot(self, scene: Optional[Dict[str, object]] = None, rotation: Optional[int] = None):
+        """What the screen shows now, as a height x width x 3 numpy array, turned by `rotation`
+        (the display's own by default). Needs numpy and Pillow (nextion-tools[images])."""
+        from ..render import Renderer, rotate
+        scene = scene or self.scene()
+        if self._renderer is None:
+            self._renderer = Renderer(self.screen.hmi)
+        pixels = self._renderer.render(scene["page"], values=scene["values"], pressed=scene["pressed"],
+                                       drawn=scene["drawn"])
+        return rotate(pixels, self.rotation if rotation is None else rotation)
+
+    def save_png(self, path: str) -> str:
+        """Save what the screen shows as a PNG. Returns the path."""
+        from ..render import save_png
+        save_png(self.snapshot(), path)
+        return path
+
     def mark(self) -> int:
         with self._cond:
             return len(self.commands)
@@ -538,6 +589,8 @@ class Display(UploadMixin):
         self.globals.clear()
         self._timer_due.clear()
         self._touch = None
+        self.drawn.clear()
+        self.version += 1
         self.flow.take_all()
         self.flow.paused = False
         self._rx = b""
@@ -552,6 +605,7 @@ class Display(UploadMixin):
         afterwards, and what to do when it resumes."""
         text = raw.decode("utf-8", errors="replace")
         self.commands.append(text)
+        self.version += 1
         log.debug("<- %s", text)
         try:
             result, stall, deferred = self._apply(protocol.parse(text))
@@ -665,7 +719,9 @@ class Display(UploadMixin):
             self._reset()
             self.boot()
             return None, 0.0, False
-        # Drawing and the rest: recorded, not modelled.
+        if kw in DRAWING:
+            self.drawn.append(ins.text)
+        # The rest: recorded, not modelled.
         return protocol.CMD_OK, 0.0, False
 
     def _store(self, key: str, value: Value) -> None:
@@ -681,6 +737,7 @@ class Display(UploadMixin):
                 self.flow.baud = value
             return
         self.components[key] = value
+        self.version += 1
         timer, _, attr = key.rpartition(".")
         if attr in ("en", "tim"):
             # Assigning either restarts the countdown from now. Not measured; the HMIs rely on
@@ -768,6 +825,8 @@ class Display(UploadMixin):
                     del self.components[key]
         self.page = name
         self.page_history.append(name)
+        self.drawn.clear()
+        self.version += 1
         self._timer_due.clear()
         self._touch = None
         if self._code is not None and self.screen is not None:

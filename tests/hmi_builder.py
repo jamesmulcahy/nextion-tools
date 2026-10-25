@@ -5,6 +5,8 @@ import struct
 from nextion_tools.hmi import DIRECTORY_ENTRY, PAGE_HEADER, PAGE_TYPE, STRING_ATTRS
 
 DATA_START = 0x1000
+ZI_HEADER = 44
+ZI_MAGIC = b"\x04\xff\x00"
 
 
 def component(name, type_, attrs=None, events=None, cid=None):
@@ -57,12 +59,32 @@ def _page_block(p):
     return bytes(header) + table + b"".join(bodies)
 
 
+def picture_block(width, height, rgb565):
+    """An .i block holding a raw picture: the header, then the record (20 zero bytes and the
+    pixels). `rgb565` is one colour for every pixel, or the pixels' bytes."""
+    if isinstance(rgb565, int):
+        rgb565 = rgb565.to_bytes(2, "little") * (width * height)
+    header = bytearray(24)
+    struct.pack_into("<III", header, 0, 0x0301640A, 0, 24)
+    struct.pack_into("<HH", header, 12, width, height)
+    return bytes(header) + bytes(20) + rgb565
+
+
 def build(pages, pictures=0, fonts=0, stale=(), program=None):
     """The bytes of a project. Pages are listed in main.HMI in the order given (that is their
     id), but stored under block names in reverse, so a reader that trusts block names is wrong.
     `stale` adds directory entries flagged stale, holding garbage. `program` is Program.s's
-    lines."""
+    lines. `pictures` and `fonts` are counts of placeholders, or lists of .i blocks
+    (picture_block) and .zi bytes."""
     blocks = {}
+    if not isinstance(pictures, int):
+        for i, block in enumerate(pictures):
+            blocks["%d.i" % i] = block
+        pictures = len(pictures)
+    if not isinstance(fonts, int):
+        for i, block in enumerate(fonts):
+            blocks["%d.zi" % i] = block
+        fonts = len(fonts)
     if program is not None:
         blocks["Program.s"] = "\r\n".join(program).encode("utf-8") + b"\r\n"
     resources = ["%d.i" % i for i in range(pictures)] + ["%d.zi" % i for i in range(fonts)]
@@ -86,3 +108,23 @@ def build(pages, pictures=0, fonts=0, stale=(), program=None):
         directory += name.encode("latin1").ljust(16, b"\0") + struct.pack("<III", DATA_START + len(payload), len(data), flags)
         payload += data
     return directory.ljust(DATA_START, b"\0") + payload
+
+
+def make_zi(name, height, glyphs, encoding="utf-8"):
+    """A .zi holding glyphs of (code, advance, left, right, data), laid out as the Editor does."""
+    names = name.encode() + encoding.encode()
+    header = bytearray(ZI_HEADER)
+    header[0:3] = ZI_MAGIC
+    header[7] = height
+    struct.pack_into("<I", header, 0x0C, len(glyphs))
+    header[0x10] = 6
+    header[0x11] = len(names)
+    struct.pack_into("<I", header, 0x20, len(name))
+    table = bytearray()
+    data = bytearray()
+    for code, advance, left, right, glyph_data in glyphs:
+        offset = 10 * len(glyphs) + len(data)
+        table += struct.pack("<HBBB", code, advance, left, right) + offset.to_bytes(3, "little")
+        table += struct.pack("<H", len(glyph_data))
+        data += glyph_data
+    return bytes(header) + names + bytes(table) + bytes(data)
