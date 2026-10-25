@@ -11,6 +11,20 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = []
+authors = [{ name = "James Mulcahy" }]
+keywords = ["nextion", "hmi", "tft", "emulator", "display", "esp32"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Embedded Systems",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.urls]
+Homepage = "https://github.com/jamesmulcahy/nextion-tools"
+Source = "https://github.com/jamesmulcahy/nextion-tools"
+Issues = "https://github.com/jamesmulcahy/nextion-tools/issues"
 
 [project.optional-dependencies]
 # Fonts, pictures and picture swaps in TFTs. Reading HMIs and the emulator need neither.
