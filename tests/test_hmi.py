@@ -20,7 +20,8 @@ def project():
             component("b_scenes", 98, {"txt": "", "pic": 59, "sendkey": 1}, {"up": ["printh 99 FF FF FF"]}),
             component("tm0", 51, {"tim": 50, "en": 0}, {"timer": ["tm0.en=0", "if(tch1!=0)", "{", "}"]}),
         ], events={"load": ["vis p_x,0"]}),
-        page("screensaver", [component("curTemp", 116, {"txt": "-°", "vscope": 1})]),
+        page("screensaver", [component("curTemp", 116, {"txt": "-°", "vscope": 1}),
+                             component("g0", 55, {"txt": "Song", "tim": 80, "dis": 4, "dir": 1})]),
     ], pictures=3, fonts=2, stale=["1.pa", "9.zi"]))
 
 
@@ -50,6 +51,7 @@ def test_components_ids_types_and_attributes(project):
     assert home.by_id(2) is home.component("b_scenes")
     assert home.by_id(99) is None and home.by_id(-1) is None
     assert home.find("nope") is None
+    assert project.page("screensaver").component("g0").kind == "scrolling text"
     with pytest.raises(KeyError, match="no component nope"):
         home.component("nope")
 

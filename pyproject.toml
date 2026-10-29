@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nextion-tools"
-version = "0.1.0"
+version = "0.1.1"
 description = "Read and edit Nextion Editor projects, fonts and TFTs, and emulate the display they run on"
 readme = "README.md"
 license = "MIT"

@@ -66,6 +66,7 @@ TYPES = {
     52: "variable",
     53: "dual-state button",
     54: "number",
+    55: "scrolling text",
     98: "button",
     106: "progress bar",
     109: "hotspot",
