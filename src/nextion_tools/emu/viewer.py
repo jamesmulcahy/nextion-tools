@@ -9,6 +9,9 @@ Or on its own, with an MCU on the other end of the display's UART:
     python -m nextion_tools.emu.viewer --hmi gui.HMI --tcp 4000 --http 8080
     # then: qemu ... -serial tcp:127.0.0.1:4000, and open http://127.0.0.1:8080/
 
+With a terminal TFT (`--terminal us` or `eu`), the screen is the terminal's framebuffer while a
+session streams pixels, and clicks become the terminal's touch samples.
+
 The page shows the screen (redrawn whenever the display's state changes), the current page,
 the last instructions, rejected instructions, and, with the flow model on, how full the input
 buffer is and how often it overflowed. A press on the screen is a finger going down at that
@@ -98,12 +101,19 @@ class Viewer:
     def frame(self) -> bytes:
         """The screen as a PNG, rendered again only when the display has changed."""
         from PIL import Image
-        scene = self.display.scene()
+        d = self.display
+        with d._cond:
+            terminal = d.showing_terminal
+            version = d.version
+        scene = None if terminal else d.scene()
+        if scene is not None:
+            version = scene["version"]
         with self._frame_lock:
-            if scene["version"] != self._frame_version:
+            if version != self._frame_version:
+                pixels = d.terminal_snapshot() if terminal else d.snapshot(scene)
                 out = io.BytesIO()
-                Image.fromarray(self.display.snapshot(scene)).save(out, "PNG")
-                self._frame_png, self._frame_version = out.getvalue(), scene["version"]
+                Image.fromarray(pixels).save(out, "PNG")
+                self._frame_png, self._frame_version = out.getvalue(), version
             return self._frame_png
 
     def state(self) -> dict:
@@ -128,19 +138,37 @@ class Viewer:
                 "max_buffered": flow.max_buffered,
                 "overflows": flow.overflows,
                 "lost": len(flow.lost),
-                "touching": d._touch is not None,
+                "touching": d._touch is not None or d._terminal_touch_down,
                 "asleep": d._asleep(),
+                "terminal": self._terminal_state(),
             }
+
+    def _terminal_state(self) -> Optional[dict]:
+        """Called with the display's lock held."""
+        d = self.display
+        if d.terminal_profile is None:
+            return None
+        rx = d.terminal
+        return {
+            "profile": d.terminal_profile.name,
+            "showing": d.showing_terminal,
+            "active": d.terminal_active,
+            "sessions": d.terminal_sessions,
+            "session": rx.session if rx is not None else None,
+            "stopped": rx.stopped if rx is not None else None,
+            "rectangles": rx.rectangles if rx is not None else 0,
+            "bytes": rx.consumed if rx is not None else 0,
+            "faults": len(rx.faults) if rx is not None else 0,
+            "last_fault": rx.faults[-1] if rx is not None and rx.faults else None,
+            "brightness": rx.brightness if rx is not None else None,
+        }
 
     def touch(self, kind: str, x: int, y: int) -> None:
         """A touch at (x, y) on the picture as shown, i.e. after rotation."""
-        from ..render import unrotate_point
         d = self.display
-        with d._cond:
-            size = d._current_page().size
-        px, py = unrotate_point(x, y, d.rotation, size)
+        px, py = d.unrotate(x, y)
         if kind == "down":
-            if d._touch is not None:
+            if d._touch is not None or d._terminal_touch_down:
                 d.touch_up()  # a lift the browser never reported
             d.touch_down(px, py)
         elif kind == "move":
@@ -178,6 +206,7 @@ PAGE = r"""<!doctype html>
     <h1>Nextion display</h1>
     <dl>
       <dt>Page</dt><dd id="page">–</dd>
+      <dt id="terminal-label" hidden>Terminal</dt><dd id="terminal" hidden>–</dd>
       <dt>MCU</dt><dd id="connected">–</dd>
       <dt>bkcmd</dt><dd id="bkcmd">–</dd>
       <dt>Instructions</dt><dd id="count">0</dd>
@@ -217,6 +246,14 @@ async function poll() {
   try {
     const s = await (await fetch("/state")).json();
     document.getElementById("page").textContent = s.page === null ? "–" : s.page + " (id " + s.page_id + ")" + (s.asleep ? ", asleep" : "");
+    const t = s.terminal, tl = document.getElementById("terminal");
+    tl.hidden = document.getElementById("terminal-label").hidden = !t;
+    if (t) {
+      tl.textContent = t.profile + ": " + (t.active ? "session " + t.session.toString(16) + ", " + t.rectangles + " rectangles, " +
+        Math.round(t.bytes / 1024) + " KB" : t.stopped ? "ended (" + t.stopped + ")" : "not started") +
+        (t.faults ? ", " + t.faults + " faults (" + t.last_fault + ")" : "");
+      tl.className = t.faults ? "bad" : "";
+    }
     document.getElementById("connected").textContent = s.connected ? "connected" : "not connected";
     document.getElementById("bkcmd").textContent = s.bkcmd;
     document.getElementById("count").textContent = s.command_count;
@@ -231,7 +268,7 @@ async function poll() {
     ov.textContent = s.overflows + (s.lost ? " (" + s.lost + " lost)" : ""); ov.className = s.overflows ? "bad" : "";
     document.getElementById("commands").textContent = s.commands.slice().reverse().join("\n");
     document.getElementById("rejected").textContent = s.errors.slice().reverse().map(e => e[0]).join("\n");
-    if (s.version !== shown && s.page !== null) {
+    if (s.version !== shown && (s.page !== null || (s.terminal && s.terminal.showing))) {
       // Load the frame off screen, then swap it in, so the one shown is always complete.
       shown = s.version;
       const next = new Image();
@@ -252,7 +289,9 @@ def main(argv=None) -> None:
     from .transport import Pty, Serial, TcpServer
 
     parser = argparse.ArgumentParser(prog="python -m nextion_tools.emu.viewer", description=__doc__.split("\n")[0])
-    parser.add_argument("--hmi", required=True, help="the project's .HMI")
+    parser.add_argument("--hmi", help="the project's .HMI (needed unless --terminal)")
+    parser.add_argument("--terminal", choices=("us", "eu", "eu-on-us"),
+                        help="the display runs nspanel-terminal's TFT for this receiver")
     where = parser.add_mutually_exclusive_group(required=True)
     where.add_argument("--tcp", type=int, metavar="PORT", help="the display's UART on 127.0.0.1:PORT (0 picks one)")
     where.add_argument("--pty", action="store_true", help="the display's UART on a pseudo-terminal")
@@ -264,6 +303,8 @@ def main(argv=None) -> None:
     parser.add_argument("--flow", action="store_true", help="model the input buffer and stalls")
     parser.add_argument("--baud", type=int, default=115200)
     args = parser.parse_args(argv)
+    if args.hmi is None and args.terminal is None:
+        parser.error("give --hmi, --terminal, or both")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if args.tcp is not None:
@@ -274,8 +315,8 @@ def main(argv=None) -> None:
         print("display UART: %s" % transport.path, flush=True)
     else:
         transport = Serial(args.serial, args.baud)
-    display = Display(transport, hmi=Project.load(args.hmi), flow_model=args.flow, baud=args.baud,
-                      rotation=args.rotation)
+    display = Display(transport, hmi=Project.load(args.hmi) if args.hmi else None, flow_model=args.flow,
+                      baud=args.baud, rotation=args.rotation, terminal=args.terminal)
     viewer = Viewer(display, args.bind, args.http)
     print("viewer: %s" % viewer.url, flush=True)
     try:

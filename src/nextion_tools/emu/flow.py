@@ -3,7 +3,7 @@
 Pure logic in virtual time, with no threads or clock of its own, so tests can drive it exactly.
 `Display` drives it in real time.
 
-What it models, measured on an NX4832T035 at 115200 baud:
+What it models, measured on an NX4832F035 at 115200 baud:
 
 - Bytes arrive at line rate (10 bits per byte). QEMU's UART does not pace what the firmware
   writes, so without this an emulated display would see bursts no real wire can deliver.
@@ -25,7 +25,7 @@ from .protocol import TERMINATOR
 
 BITS_PER_BYTE = 10  # 8N1
 DEFAULT_BAUD = 115200
-DEFAULT_CAPACITY = 1088  # an NX4832T035's (devices.py)
+DEFAULT_CAPACITY = 1088  # an NX4832F035's (devices.py)
 
 # execute(raw, t) -> (stall seconds, callback at the end of the stall or None)
 Execute = Callable[[bytes, float], Tuple[float, Optional[Callable[[float], None]]]]

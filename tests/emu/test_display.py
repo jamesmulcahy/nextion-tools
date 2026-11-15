@@ -284,9 +284,9 @@ def test_a_device_profile_sets_what_the_display_measures_as():
     import dataclasses
     import socket
 
-    from nextion_tools.emu import NX4832T035, Display, SocketTransport
+    from nextion_tools.emu import NX4832F035, Display, SocketTransport
 
-    other = dataclasses.replace(NX4832T035, model="X", comok=b"comok 1,x", buffer_capacity=512, redraw_s=0.1)
+    other = dataclasses.replace(NX4832F035, model="X", comok=b"comok 1,x", buffer_capacity=512, redraw_s=0.1)
     a, b = socket.socketpair()
     display = Display(SocketTransport(a), device=other, redraw_s=0.2)
     try:

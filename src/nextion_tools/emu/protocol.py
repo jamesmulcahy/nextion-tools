@@ -4,7 +4,7 @@ Instructions from the MCU are text terminated by FF FF FF. The display answers w
 start with a code byte and end with FF FF FF, except during a TFT upload, whose replies are bare
 bytes.
 
-What the display actually returns was measured on an NX4832T035 (a Sonoff NSPanel) running the
+What the display actually returns was measured on an NX4832F035 (a Sonoff NSPanel) running the
 NSPanel Manager TFT, and is noted at each code. Where that differs from Nextion's documentation,
 the measurement wins.
 """

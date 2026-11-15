@@ -4,6 +4,7 @@
   python -m nextion_tools.emu --pty               # prints the pty to point a program at
   python -m nextion_tools.emu --serial /dev/ttyUSB0
   python -m nextion_tools.emu --tcp 4000 --hmi gui.HMI   # the project's pages and code
+  python -m nextion_tools.emu --tcp 4000 --terminal us   # nspanel-terminal's US TFT
 """
 
 import argparse
@@ -26,6 +27,8 @@ def main(argv=None) -> None:
     parser.add_argument("--flow", action="store_true", help="model the input buffer and stalls")
     parser.add_argument("--banner", default="", help="a frame the TFT prints when it starts, e.g. NSPM")
     parser.add_argument("--hmi", help="the project's .HMI: its pages, ids and code")
+    parser.add_argument("--terminal", choices=("us", "eu", "eu-on-us"),
+                        help="run nspanel-terminal's TFT for this receiver (protocol 8)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(name)s %(message)s")
@@ -39,7 +42,7 @@ def main(argv=None) -> None:
         transport = Serial(args.serial, args.baud)
     banner = args.banner.encode() + TERMINATOR if args.banner else b""
     display = Display(transport, flow_model=args.flow, baud=args.baud, banner=banner,
-                      hmi=Project.load(args.hmi) if args.hmi else None)
+                      hmi=Project.load(args.hmi) if args.hmi else None, terminal=args.terminal)
     try:
         # Power on (the banner, Program.s) once the MCU is there to hear it.
         while not display.connected:
