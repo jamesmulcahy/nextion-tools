@@ -91,3 +91,43 @@ def test_bad_touches_are_refused(rig):
     with pytest.raises(urllib.error.HTTPError) as e:
         touch(viewer, "wiggle", 1, 1)
     assert e.value.code == 409
+
+
+@pytest.fixture(params=[0, 180])
+def terminal_rig(request):
+    from test_terminal import TerminalMcu
+    a, b = socket.socketpair()
+    display = Display(SocketTransport(a), terminal="us", rotation=request.param)
+    tm = TerminalMcu(Mcu(b))
+    viewer = Viewer(display)
+    time.sleep(0.05)
+    yield display, tm, viewer
+    viewer.close()
+    display.close()
+    b.close()
+
+
+def test_terminal_framebuffer_and_touch(terminal_rig):
+    from nextion_tools.emu import terminal as t
+    display, tm, viewer = terminal_rig
+    state = json.loads(get(viewer, "/state")[2])
+    assert state["page"] is None and state["terminal"]["profile"] == "us" and not state["terminal"]["active"]
+    tm.enter(session=0x55)
+    red = t.encode_record(0x55, 0, t.RECT, 0, 0, 1, 1) + t.encode_record(0x55, 1, t.DATA, body=b"\x80\xf8\x00") + \
+        t.encode_record(0x55, 2, t.END, 1)
+    tm.stream(red)
+    display.wait_for_rectangles(1)
+    state = json.loads(get(viewer, "/state")[2])["terminal"]
+    assert state["active"] and state["session"] == 0x55 and state["rectangles"] == 1
+    from PIL import Image
+    import io
+    with Image.open(io.BytesIO(get(viewer, "/frame.png")[2])) as im:
+        assert im.size == (320, 480)
+        # The red pixel at the receiver's 0,0, where the rotation shows it.
+        shown = (0, 0) if display.rotation == 0 else (319, 479)
+        assert im.convert("RGB").getpixel(shown) == (255, 0, 0)
+    # A click where that pixel is shown is a touch at the receiver's 0,0.
+    assert touch(viewer, "down", *shown) == {"ok": True}
+    assert touch(viewer, "up", *shown) == {"ok": True}
+    samples = tm.samples(lambda s: len(s) >= 2)
+    assert [(r.mask, r.x, r.y) for r in samples] == [(1, 0, 0), (0, 0, 0)]
