@@ -46,7 +46,7 @@ import time
 from typing import Callable, Deque, Dict, List, Optional, Tuple, Union
 
 from . import protocol
-from .devices import NX4832T035, Device
+from .devices import NX4832F035, Device
 from .flow import DEFAULT_BAUD, FlowModel
 from ..hmi import SLIDER_TYPE, Component, Page, Project
 from .model import Screen
@@ -59,8 +59,8 @@ from .waiting import wait_for
 log = logging.getLogger("nextion_tools.emu")
 
 # The NSPanel's display, the only model measured so far.
-COMOK = NX4832T035.comok
-REDRAW_S = NX4832T035.redraw_s
+COMOK = NX4832F035.comok
+REDRAW_S = NX4832F035.redraw_s
 
 _DELAY = re.compile(r"^delay=(\d+)$")
 
@@ -76,7 +76,7 @@ Override = Callable[["Display"], None]
 
 class Display(UploadMixin):
     def __init__(self, transport: Optional[Transport] = None, *, flow_model: bool = False,
-                 device: Device = NX4832T035, baud: int = DEFAULT_BAUD,
+                 device: Device = NX4832F035, baud: int = DEFAULT_BAUD,
                  buffer_capacity: Optional[int] = None, redraw_s: Optional[float] = None,
                  comok: Optional[bytes] = None, banner: bytes = b"",
                  startup_frames: bool = False, flash_size: Optional[int] = None,

@@ -18,12 +18,19 @@ class Device:
     redraw_s: float  # how long a full-page redraw (`page`, `ref`) blocks the next instruction
 
 
-# The Sonoff NSPanel's display, measured on a panel ("Office") 2026-10-23/24: the input buffer
-# held 1080-1092 bytes, and a page change blocked the next instruction for about 400 ms.
-NX4832T035 = Device(
-    model="NX4832T035_011R",
-    comok=b"comok 2,30614-0,NX4832T035_011R,163,61488,D264B8204F0E1828,16777216",
+# The Sonoff NSPanel's display, the same model in US and EU panels: NX4832F035_011C, MCU code
+# 61744 (0xF130). Measured on a panel ("Office") 2026-10-23/24: the input buffer held 1080-1092
+# bytes, and a page change blocked the next instruction for about 400 ms. The `connect` reply's
+# fourth field is the TFT's native version (72 here, as NSPanel Manager's TFT reports on one
+# panel); the serial number differs per panel.
+NX4832F035 = Device(
+    model="NX4832F035_011C",
+    comok=b"comok 2,30614-0,NX4832F035_011C,72,61744,018C3401CB9C6761,16777216",
     flash_size=16777216,
     buffer_capacity=1088,
     redraw_s=0.4,
 )
+
+# The name this profile had in 0.1.x, when it carried a model and MCU code (NX4832T035_011R,
+# 61488) that no NSPanel reports. Kept so code that imports it still works.
+NX4832T035 = NX4832F035

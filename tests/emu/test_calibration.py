@@ -1,4 +1,4 @@
-"""The measurements made on a real NX4832T035 (Office, 2026-10-23/24), replayed against the flow
+"""The measurements made on a real NX4832F035 (Office, 2026-10-23/24), replayed against the flow
 model. If a change to the model makes one of these fail, the model no longer matches hardware.
 
 E1/E2: how the display replies. E3: the input buffer. E4: drain rate without a stall.

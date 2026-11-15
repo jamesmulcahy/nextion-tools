@@ -92,7 +92,7 @@ python -m nextion_tools.emu.script gui.HMI        # can every event of this HMI 
 
 ## What it models
 
-Replies follow what an NX4832T035 (the Sonoff NSPanel's display) was measured to do, which differs
+Replies follow what an NX4832F035 (the Sonoff NSPanel's display, US and EU) was measured to do, which differs
 from Nextion's documentation in places:
 
 | Instruction | `bkcmd=3` | `bkcmd=0` |
