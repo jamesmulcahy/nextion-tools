@@ -35,6 +35,12 @@ With `sendxy=1` every press and release is also reported with its coordinates (0
 display (0x87) and is used up doing it. Those follow Nextion's instruction set; neither is
 measured, and whether a drag streams 0x67 frames is not known (they are sent only on press and
 release here).
+
+With `terminal="us"` (or "eu", or a TerminalProfile) the display runs nspanel-terminal's TFT,
+whose native code streams pixels instead of running pages (terminal.py): `connect` reports its
+native version, 94, and a `touch_j` with sys0..sys2 set starts a session. Until it ends, what
+the MCU sends is protocol-8 records drawn into `framebuffer`, touches are reported to it as
+terminal touch samples, and snapshot() shows the framebuffer.
 """
 
 import collections
@@ -46,6 +52,7 @@ import time
 from typing import Callable, Deque, Dict, List, Optional, Tuple, Union
 
 from . import protocol
+from . import terminal as term
 from .devices import NX4832F035, Device
 from .flow import DEFAULT_BAUD, FlowModel
 from ..hmi import SLIDER_TYPE, Component, Page, Project
@@ -82,12 +89,19 @@ class Display(UploadMixin):
                  startup_frames: bool = False, flash_size: Optional[int] = None,
                  resolver: Optional[Resolver] = None, hmi: Optional[Project] = None,
                  scripts: bool = True, overrides: Optional[Dict[str, Override]] = None,
-                 rotation: int = 0,
+                 rotation: int = 0, terminal: Union[None, str, "term.TerminalProfile"] = None,
                  clock: Callable[[], float] = time.monotonic):
         # The device's measurements, each of which a keyword argument may override.
         self.device = device
         buffer_capacity = device.buffer_capacity if buffer_capacity is None else buffer_capacity
         redraw_s = device.redraw_s if redraw_s is None else redraw_s
+        # nspanel-terminal's TFT: the receiver it adds, and what the LCD holds while it draws.
+        self.terminal_profile: Optional[term.TerminalProfile] = term.profile(terminal) if terminal is not None else None
+        self.framebuffer: Optional[term.Framebuffer] = None
+        if self.terminal_profile is not None:
+            self.framebuffer = term.Framebuffer(*self.terminal_profile.size)
+            if comok is None:
+                comok = term.terminal_comok(device.comok)
         comok = device.comok if comok is None else comok
         flash_size = device.flash_size if flash_size is None else flash_size
         self.transport = transport if transport is not None else TcpServer()
@@ -149,6 +163,10 @@ class Display(UploadMixin):
         self._running: List[str] = []  # the events being run, innermost last
         self._timer_due: Dict[str, float] = {}  # "page.timer" -> when it next fires
         self._touch: Optional[_Touch] = None
+        # The current or last terminal session (terminal.Receiver), and how many there have been.
+        self.terminal: Optional[term.Receiver] = None
+        self.terminal_sessions = 0
+        self._terminal_touch_down = False
 
         self.flow = FlowModel(self._execute, self._overflowed, baud=baud, capacity=buffer_capacity)
         self._flow_model = flow_model
@@ -219,6 +237,8 @@ class Display(UploadMixin):
     def touch_down(self, x: int, y: int) -> None:
         """A finger lands on the screen at (x, y)."""
         with self._cond:
+            if self._terminal_input("down", x, y):
+                return
             if self._touch is not None:
                 raise RuntimeError("already touching at %r" % ((self._touch.x, self._touch.y),))
             page = self._current_page()
@@ -246,6 +266,8 @@ class Display(UploadMixin):
     def touch_move(self, x: int, y: int) -> None:
         """The finger moves to (x, y). A slider it pressed follows it and runs its slide code."""
         with self._cond:
+            if self._terminal_input("move", x, y):
+                return
             touch = self._held()
             if touch is None or touch.component is None:
                 return
@@ -260,6 +282,8 @@ class Display(UploadMixin):
     def touch_up(self) -> None:
         """The finger lifts. The release goes to what it pressed, wherever it is now."""
         with self._cond:
+            if self._terminal_input("up", 0, 0):
+                return
             touch, self._touch = self._held(), None
             self.version += 1
             if touch is None:
@@ -290,8 +314,7 @@ class Display(UploadMixin):
 
     def swipe(self, direction: str, distance: int = 160, duration: float = 0.2) -> None:
         """A swipe across the middle of the screen: "left", "right", "up" or "down"."""
-        with self._cond:
-            w, h = self._current_page().size
+        w, h = self.size
         cx, cy = w // 2, h // 2
         dx, dy = {"left": (-1, 0), "right": (1, 0), "up": (0, -1), "down": (0, 1)}[direction]
         half = distance // 2
@@ -393,6 +416,7 @@ class Display(UploadMixin):
             if self.flow_model:
                 self.flow.run(now)
             self._run_timers(now)
+            self._terminal_watchdog(now)
             self._cond.notify_all()
 
     def send_frame(self, code: int, payload: bytes = b"") -> None:
@@ -499,6 +523,8 @@ class Display(UploadMixin):
         (nextion-tools[images])."""
         import numpy as np
         from ..render import Renderer, rotate
+        if scene is None and self.showing_terminal:
+            return self.terminal_snapshot(rotation)
         scene = scene or self.scene()
         if self._renderer is None:
             self._renderer = Renderer(self.screen.hmi)
@@ -515,6 +541,77 @@ class Display(UploadMixin):
         from ..render import save_png
         save_png(self.snapshot(), path)
         return path
+
+    # ---- the terminal ---------------------------------------------------------------------
+
+    @property
+    def terminal_active(self) -> bool:
+        """Whether a terminal session is running: what arrives is pixels, not instructions."""
+        return self.terminal is not None and self.terminal.active
+
+    @property
+    def showing_terminal(self) -> bool:
+        """Whether the screen shows the framebuffer: during a session, and always on a terminal
+        TFT without an HMI (whose blank page is not modelled), which keeps the last pixels."""
+        return self.framebuffer is not None and (self.terminal_active or self.screen is None)
+
+    @property
+    def size(self) -> Tuple[int, int]:
+        """(w, h) of what touches address: the terminal's area while it shows, else the page's."""
+        with self._cond:
+            if self.showing_terminal:
+                return self.framebuffer.size
+            return self._current_page().size
+
+    def unrotate(self, x: int, y: int) -> Tuple[int, int]:
+        """The display's coordinates of point (x, y) of the picture as shown, turned by `rotation`:
+        where to touch for a touch to land there. (render.unrotate_point, without numpy.)"""
+        w, h = self.size
+        return {0: (x, y), 90: (y, h - 1 - x), 180: (w - 1 - x, h - 1 - y), 270: (w - 1 - y, x)}[self.rotation]
+
+    def terminal_rgb565(self) -> bytes:
+        """The framebuffer's pixels: RGB565 high byte first, row by row."""
+        with self._cond:
+            if self.framebuffer is None:
+                raise RuntimeError("the display runs no terminal TFT (Display(terminal=...))")
+            return self.framebuffer.rgb565()
+
+    def terminal_pixel(self, x: int, y: int) -> int:
+        """The framebuffer's RGB565 value at (x, y), in the receiver's coordinates."""
+        with self._cond:
+            if self.framebuffer is None:
+                raise RuntimeError("the display runs no terminal TFT (Display(terminal=...))")
+            return self.framebuffer.pixel(x, y)
+
+    def terminal_snapshot(self, rotation: Optional[int] = None):
+        """The framebuffer as a height x width x 3 numpy array, turned by `rotation` (the
+        display's own by default). Needs numpy."""
+        from ..render import rotate
+        with self._cond:
+            if self.framebuffer is None:
+                raise RuntimeError("the display runs no terminal TFT (Display(terminal=...))")
+            pixels = self.framebuffer.rgb()
+        return rotate(pixels, self.rotation if rotation is None else rotation)
+
+    def terminal_image(self, rotation: Optional[int] = None):
+        """The framebuffer as a PIL image, turned as terminal_snapshot() turns it."""
+        from PIL import Image
+        return Image.fromarray(self.terminal_snapshot(rotation))
+
+    def wait_for_terminal(self, timeout: float = 30) -> "term.Receiver":
+        """Until a terminal session runs. Returns it."""
+        self.wait_for(lambda d: d.terminal_active, timeout, "a terminal session")
+        return self.terminal
+
+    def wait_for_terminal_end(self, timeout: float = 30) -> str:
+        """Until the session ends. Returns why: "exit", "credit", "timeout", "power"."""
+        self.wait_for(lambda d: d.terminal is not None and not d.terminal.active, timeout, "the terminal session to end")
+        return self.terminal.stopped
+
+    def wait_for_rectangles(self, count: int, timeout: float = 30) -> None:
+        """Until the session has completed `count` rectangles."""
+        self.wait_for(lambda d: d.terminal is not None and d.terminal.rectangles >= count, timeout,
+                      "%d terminal rectangles" % count)
 
     def mark(self) -> int:
         with self._cond:
@@ -566,6 +663,9 @@ class Display(UploadMixin):
     def _ingest(self, data: bytes) -> None:
         """Called with _cond held."""
         while data:
+            if self.terminal_active:
+                self._terminal_feed(data)
+                return
             if self.upload is not None:
                 # TFT bytes may contain FF FF FF; nothing is an instruction until the upload ends.
                 data = self._receive_upload(data)
@@ -575,12 +675,12 @@ class Display(UploadMixin):
                 return
             self._rx += data
             data = b""
-            while self.upload is None and TERMINATOR in self._rx:
+            while self.upload is None and not self.terminal_active and TERMINATOR in self._rx:
                 raw, self._rx = self._rx.split(TERMINATOR, 1)
                 stall, after = self._execute(raw, self._clock())
                 if after is not None:
                     after(self._clock())
-            if self.upload is not None:
+            if self.upload is not None or self.terminal_active:
                 data, self._rx = self._rx, b""
 
     def _cpu_loop(self) -> None:
@@ -591,11 +691,16 @@ class Display(UploadMixin):
                 due = self._run_timers(self._clock())
                 if due is not None:
                     timeout = max(0.0, due - self._clock())
+                self._terminal_watchdog(self._clock())
+                if self.terminal_active:
+                    wait = max(0.0, self.terminal.watchdog_due - self._clock())
+                    timeout = wait if timeout is None else min(timeout, wait)
                 if self.flow_model:
                     now = self._clock()
                     self.flow.run(now)
-                    if self.upload is not None:
-                        # An upload began: what followed its instruction is TFT data.
+                    if self.upload is not None or self.terminal_active:
+                        # An upload or a terminal session began: what followed its instruction
+                        # is TFT data, or records.
                         rest = self.flow.take_all()
                         if rest:
                             self._ingest(rest)
@@ -612,6 +717,11 @@ class Display(UploadMixin):
 
     def _reset(self) -> None:
         """Called with _cond held."""
+        if self.terminal_active:
+            self.terminal.stop("power")
+            self._terminal_returned(report=False)
+        if self.framebuffer is not None:
+            self.framebuffer.clear()
         self.bkcmd = protocol.BKCMD_DEFAULT
         self.page = self.screen.first_page if self.screen else None
         self.components.clear()
@@ -753,6 +863,9 @@ class Display(UploadMixin):
             if self.page is None:
                 return protocol.INVALID, 0.0, False
             self._reply(protocol.frame(protocol.CURRENT_PAGE, bytes([self.page_id(self.page)])))
+            return None, 0.0, False
+        if kw == "touch_j" and self.terminal_profile is not None:
+            self._terminal_enter()
             return None, 0.0, False
         if kw in DRAWING:
             self.drawn.append(ins.text)
@@ -1002,6 +1115,91 @@ class Display(UploadMixin):
         if key.count(".") >= 2 or self.page is None:
             return key
         return "%s.%s" % (self.page, key)
+
+    # ---- the terminal's session (called with _cond held) ---------------------------------------
+
+    def _terminal_enter(self) -> None:
+        """touch_j on a terminal TFT: the receiver checks sys0..sys2 as pool_entry() does, and
+        either runs a session or returns to the stock runtime at once."""
+        def number(name):
+            v = self._value(name)
+            return v if isinstance(v, int) else -1
+        baud, touch, session = number("sys0"), number("sys1"), number("sys2") & 0xFFFF
+        if baud not in term.BAUDS or touch not in (0, 1) or not session:
+            log.warning("touch_j: no terminal session (sys0=%s sys1=%s sys2=%s)", self._value("sys0"),
+                        self._value("sys1"), self._value("sys2"))
+            self._reply(term.RETURN_FRAME)
+            return
+        now = self._clock()
+        self.terminal = term.Receiver(session, self.terminal_profile, self.framebuffer, touch_enabled=bool(touch),
+                                      now=now, baud=baud)
+        self.terminal_sessions += 1
+        self._terminal_touch_down = False
+        self._touch = None
+        self.flow.paused = True
+        self._set_link_baud(baud)
+        self.version += 1
+        log.info("terminal session %04x at %d baud, touch %s", session, baud, "on" if touch else "off")
+        self._reply(self.terminal.ready(now + term.ENTRY_DELAY_S), delay=term.ENTRY_DELAY_S)
+
+    def _terminal_feed(self, data: bytes) -> None:
+        rx = self.terminal
+        changes = rx.changes
+        for report in rx.feed(data, self._clock()):
+            self._reply(report)
+        if rx.changes != changes:
+            self.version += 1
+        if rx.brightness is not None and self.system.get("dim") != rx.brightness:
+            self.system["dim"] = rx.brightness
+        if rx.stopped is not None:
+            self._terminal_returned()
+
+    def _terminal_watchdog(self, now: float) -> None:
+        if self.terminal_active:
+            for report in self.terminal.check(now):
+                self._reply(report)
+            if not self.terminal.active:
+                self._terminal_returned()
+
+    def _terminal_returned(self, report: bool = True) -> None:
+        """The session ended: back to the stock runtime at 115200 baud, which takes instructions
+        again (its blank page is not modelled)."""
+        rx = self.terminal
+        log.info("terminal session %04x ended: %s (%d rectangles)", rx.session, rx.stopped, rx.rectangles)
+        self.flow.paused = False
+        self._rx = b""
+        self._set_link_baud(term.STOCK_BAUD)
+        self._terminal_touch_down = False
+        self.version += 1
+        if report:
+            self._reply(term.RETURN_FRAME, delay=term.ENTRY_DELAY_S)
+
+    def _set_link_baud(self, baud: int) -> None:
+        self.flow.baud = baud
+        set_baud = getattr(self.transport, "set_baud", None)
+        if set_baud is not None:
+            try:
+                set_baud(baud)
+            except Exception as e:  # a serial port that cannot do it
+                log.warning("could not set the UART to %d baud: %s", baud, e)
+
+    def _terminal_input(self, kind: str, x: int, y: int) -> bool:
+        """A touch while the framebuffer shows: a terminal touch sample, in the receiver's drawing
+        coordinates. Returns False if the touch is for the HMI instead."""
+        if not self.showing_terminal:
+            return False
+        if kind == "down" and self._terminal_touch_down:
+            raise RuntimeError("already touching")
+        if kind == "move" and not self._terminal_touch_down:
+            return True
+        if kind == "up" and not self._terminal_touch_down:
+            return True
+        self._terminal_touch_down = kind != "up"
+        if self.terminal_active:
+            for report in self.terminal.touch(kind != "up", x, y, self._clock()):
+                self._reply(report)
+        self._cond.notify_all()
+        return True
 
     # ---- sending ---------------------------------------------------------------------
 
